@@ -253,7 +253,8 @@ handle_call({standby_status_update, FlushedLSN, AppliedLSN}, _From,
                    subproto_state = #repl{last_received_lsn = ReceivedLSN} = Repl} = State) ->
     send(State, ?COPY_DATA, epgsql_wire:encode_standby_status_update(ReceivedLSN, FlushedLSN, AppliedLSN)),
     Repl1 = Repl#repl{last_flushed_lsn = FlushedLSN,
-                      last_applied_lsn = AppliedLSN},
+                      last_applied_lsn = AppliedLSN,
+                      last_standby_status_update_time = erlang:monotonic_time(milli_seconds)},
     {reply, ok, State#state{subproto_state = Repl1}};
 
 handle_call({copy_send_rows, Rows}, _From,
@@ -511,7 +512,9 @@ loop(#state{data = Data, handler = Handler, subproto_state = Repl} = State) ->
                           last_applied_lsn = LastAppliedLSN} = Repl,
                     send(State, ?COPY_DATA, epgsql_wire:encode_standby_status_update(
                         LastReceivedLSN, LastFlushedLSN, LastAppliedLSN)),
-                    {noreply, State#state{subproto_state = Repl#repl{feedback_required = false}}};
+                    Repl1 = Repl#repl{feedback_required = false,
+                                      last_standby_status_update_time = erlang:monotonic_time(milli_seconds)},
+                    {noreply, State#state{subproto_state = Repl1}};
                 _ ->
                     {noreply, State}
             end
@@ -734,19 +737,31 @@ on_copy_from_stdin(M, Data, Sock) when M == ?NOTICE;
 on_replication(?COPY_DATA, <<?PRIMARY_KEEPALIVE_MESSAGE:8, LSN:?int64, _Timestamp:?int64, ReplyRequired:8>>,
                #state{subproto_state = #repl{last_flushed_lsn = LastFlushedLSN,
                                              last_applied_lsn = LastAppliedLSN,
-                                             align_lsn = AlignLsn} = Repl} = State) ->
+                                             align_lsn = AlignLsn,
+                                             standby_status_update_interval = UpdateInterval,
+                                             last_standby_status_update_time = LastStatusUpdate} = Repl} = State) ->
+    IsTimeToUpdate =
+        (erlang:monotonic_time(milli_seconds) - LastStatusUpdate) > UpdateInterval andalso UpdateInterval > 0,
     Repl1 =
         case ReplyRequired of
             1 when AlignLsn ->
                 send(State, ?COPY_DATA,
                      epgsql_wire:encode_standby_status_update(LSN, LSN, LSN)),
                 Repl#repl{feedback_required = false,
-                     last_received_lsn = LSN, last_applied_lsn = LSN, last_flushed_lsn = LSN};
+                          last_received_lsn = LSN, last_applied_lsn = LSN, last_flushed_lsn = LSN,
+                          last_standby_status_update_time = erlang:monotonic_time(milli_seconds)};
             1 when not AlignLsn ->
                 send(State, ?COPY_DATA,
                      epgsql_wire:encode_standby_status_update(LSN, LastFlushedLSN, LastAppliedLSN)),
                 Repl#repl{feedback_required = false,
-                          last_received_lsn = LSN};
+                          last_received_lsn = LSN,
+                          last_standby_status_update_time = erlang:monotonic_time(milli_seconds)};
+            _ when AlignLsn andalso IsTimeToUpdate ->
+                send(State, ?COPY_DATA,
+                     epgsql_wire:encode_standby_status_update(LSN, LSN, LSN)),
+                Repl#repl{feedback_required = false,
+                          last_received_lsn = LSN, last_applied_lsn = LSN, last_flushed_lsn = LSN,
+                          last_standby_status_update_time = erlang:monotonic_time(milli_seconds)};
             _ ->
                 Repl#repl{feedback_required = true,
                           last_received_lsn = LSN}
