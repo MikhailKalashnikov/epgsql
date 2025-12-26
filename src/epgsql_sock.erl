@@ -181,7 +181,7 @@ set_net_socket(Mod, Socket, State) ->
 
 -spec init_replication_state(pg_sock()) -> pg_sock().
 init_replication_state(State) ->
-    State#state{subproto_state = #repl{}}.
+    State#state{subproto_state = #repl{last_standby_status_update_time = erlang:monotonic_time(milli_seconds)}}.
 
 -spec set_attr(atom(), any(), pg_sock()) -> pg_sock().
 set_attr(backend, {_Pid, _Key} = Backend, State) ->
