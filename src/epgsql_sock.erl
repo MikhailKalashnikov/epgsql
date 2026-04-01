@@ -748,8 +748,7 @@ on_replication(?COPY_DATA, <<?PRIMARY_KEEPALIVE_MESSAGE:8, LSN:?int64, _Timestam
                 Repl#repl{feedback_required = false,
                           last_received_lsn = LSN};
             _ ->
-                Repl#repl{feedback_required = true,
-                          last_received_lsn = LSN}
+                Repl#repl{last_received_lsn = LSN}
         end,
     {noreply, State#state{subproto_state = Repl1}};
 
